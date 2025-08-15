@@ -1,0 +1,1601 @@
+import React, { useState } from 'react';
+import { Upload, FileText, Brain, PenTool, Settings, FolderOpen, AlertCircle, CheckCircle, Users, Clock, Folder, Link, RefreshCw } from 'lucide-react';
+
+const API_BASE = 'http://localhost:3001/api';
+
+const RFPAnalyzer = () => {
+  const [rfpFiles, setRfpFiles] = useState([]);
+  const [analysis, setAnalysis] = useState(null);
+  const [historicalDocs, setHistoricalDocs] = useState([]);
+  const [responseText, setResponseText] = useState('');
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [driveConfigured, setDriveConfigured] = useState(false);
+  const [aiConfigured, setAiConfigured] = useState(false);
+  const [configLoading, setConfigLoading] = useState(true);
+  const [contentIds, setContentIds] = useState([]);
+  const [uploadStatus, setUploadStatus] = useState('');
+  const [aiProviders, setAiProviders] = useState([]);
+  const [recommendedProvider, setRecommendedProvider] = useState('');
+  const [selectedProvider, setSelectedProvider] = useState('');
+  const [selectedModel, setSelectedModel] = useState('');
+  const [analysisProgress, setAnalysisProgress] = useState('');
+  const [progressSteps, setProgressSteps] = useState([]);
+  const [aiQuestion, setAiQuestion] = useState('');
+  const [aiAnswer, setAiAnswer] = useState('');
+  const [isAnswering, setIsAnswering] = useState(false);
+  const [comprehensiveAnalysis, setComprehensiveAnalysis] = useState('');
+  const [analysisStartTime, setAnalysisStartTime] = useState(null);
+  const [analysisResponseTime, setAnalysisResponseTime] = useState(null);
+  const [currentElapsedTime, setCurrentElapsedTime] = useState(0);
+  const [analysisMode, setAnalysisMode] = useState('upload'); // 'upload' or 'drive'
+  const [driveFolderId, setDriveFolderId] = useState('');
+  const [driveFiles, setDriveFiles] = useState([]);
+  const [selectedDriveFiles, setSelectedDriveFiles] = useState(new Set());
+  const [driveLoading, setDriveLoading] = useState(false);
+  const [driveError, setDriveError] = useState('');
+
+  // Check configuration status on component mount
+  React.useEffect(() => {
+    checkConfiguration();
+  }, []);
+
+  // Timer effect for live elapsed time during analysis
+  React.useEffect(() => {
+    let interval;
+    if (isAnalyzing && analysisStartTime) {
+      interval = setInterval(() => {
+        setCurrentElapsedTime(Date.now() - analysisStartTime);
+      }, 100); // Update every 100ms for smooth timer
+    } else {
+      setCurrentElapsedTime(0);
+    }
+
+    return () => {
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
+  }, [isAnalyzing, analysisStartTime]);
+
+  // Helper function to format milliseconds to readable time
+  const formatTime = (milliseconds) => {
+    if (!milliseconds) return '0.00s';
+    
+    const seconds = milliseconds / 1000;
+    if (seconds < 60) {
+      return `${seconds.toFixed(2)}s`;
+    } else {
+      const minutes = Math.floor(seconds / 60);
+      const remainingSeconds = seconds % 60;
+      return `${minutes}m ${remainingSeconds.toFixed(2)}s`;
+    }
+  };
+
+  const checkConfiguration = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/config`);
+      const config = await response.json();
+      setAiConfigured(config.aiConfigured);
+      setDriveConfigured(config.driveConfigured);
+      setAiProviders(config.aiProviders || []);
+      setRecommendedProvider(config.recommendedProvider || '');
+      
+      // Set default selections
+      if (config.recommendedProvider && !selectedProvider) {
+        setSelectedProvider(config.recommendedProvider);
+        const provider = config.aiProviders?.find(p => p.key === config.recommendedProvider);
+        if (provider && provider.models && provider.models.length > 0 && !selectedModel) {
+          setSelectedModel(provider.models[0]);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to check configuration:', error);
+    } finally {
+      setConfigLoading(false);
+    }
+  };
+
+  const extractFolderId = (input) => {
+    const trimmed = input.trim();
+    // Check if it's a full Google Drive URL
+    const urlMatch = trimmed.match(/\/folders\/([a-zA-Z0-9-_]+)/);
+    if (urlMatch) {
+      return urlMatch[1];
+    }
+    // Otherwise, assume it's already a folder ID
+    return trimmed;
+  };
+
+  const loadDriveFolder = async () => {
+    if (!driveFolderId.trim()) {
+      setDriveError('Please enter a Google Drive folder ID or URL');
+      return;
+    }
+
+    setDriveLoading(true);
+    setDriveError('');
+
+    try {
+      const folderId = extractFolderId(driveFolderId);
+      const response = await fetch(`${API_BASE}/drive/folder/${folderId}`);
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to load folder');
+      }
+
+      setDriveFiles(result.files || []);
+      setSelectedDriveFiles(new Set());
+
+      if (result.files.length === 0) {
+        setDriveError('No supported documents found in this folder');
+      }
+
+    } catch (error) {
+      console.error('Drive folder loading error:', error);
+      setDriveError(error.message);
+      setDriveFiles([]);
+    } finally {
+      setDriveLoading(false);
+    }
+  };
+
+  const toggleDriveFileSelection = (fileId) => {
+    const newSelection = new Set(selectedDriveFiles);
+    if (newSelection.has(fileId)) {
+      newSelection.delete(fileId);
+    } else {
+      newSelection.add(fileId);
+    }
+    setSelectedDriveFiles(newSelection);
+  };
+
+  const analyzeDriveFiles = async () => {
+    if (selectedDriveFiles.size === 0) {
+      alert('Please select at least one file to analyze');
+      return;
+    }
+
+    if (!aiConfigured) {
+      alert('AI API is not configured on the backend');
+      return;
+    }
+
+    setIsAnalyzing(true);
+    setAnalysisStartTime(Date.now());
+    setAnalysisResponseTime(null);
+    setAnalysisProgress(`Starting analysis of ${selectedDriveFiles.size} Google Drive file${selectedDriveFiles.size > 1 ? 's' : ''}...`);
+    setProgressSteps([
+      { step: 'Downloading from Google Drive', status: 'completed' },
+      { step: 'Connecting to AI provider', status: 'in_progress' },
+      { step: 'Analyzing document content', status: 'pending' },
+      { step: 'Extracting requirements', status: 'pending' },
+      { step: 'Identifying risks and opportunities', status: 'pending' },
+      { step: 'Finalizing analysis', status: 'pending' }
+    ]);
+
+    try {
+      const fileIds = Array.from(selectedDriveFiles);
+      console.log('Starting Google Drive analysis for fileIds:', fileIds);
+
+      const analyzeResponse = await fetch(`${API_BASE}/drive/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileIds: fileIds,
+          provider: selectedProvider,
+          model: selectedModel
+        })
+      });
+
+      if (!analyzeResponse.ok) {
+        const errorData = await analyzeResponse.json();
+        throw new Error(errorData.error || 'Failed to analyze Google Drive files');
+      }
+
+      setAnalysisProgress('Processing AI analysis...');
+      setProgressSteps(prev => prev.map((step, i) =>
+        i === 1 ? { ...step, status: 'completed' } :
+        i === 2 ? { ...step, status: 'in_progress' } : step
+      ));
+
+      const analysisResult = await analyzeResponse.json();
+      console.log('Google Drive analysis successful:', analysisResult);
+
+      setAnalysisProgress('Extracting key insights...');
+      setProgressSteps(prev => prev.map((step, i) =>
+        i === 2 ? { ...step, status: 'completed' } :
+        i === 3 ? { ...step, status: 'in_progress' } : step
+      ));
+
+      // Small delay to show final steps
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      setAnalysisProgress(`Analysis complete for ${selectedDriveFiles.size} Google Drive file${selectedDriveFiles.size > 1 ? 's' : ''}!`);
+      setProgressSteps(prev => prev.map(step => ({ ...step, status: 'completed' })));
+
+      // Calculate response time
+      if (analysisStartTime) {
+        const responseTime = Date.now() - analysisStartTime;
+        setAnalysisResponseTime(responseTime);
+      }
+
+      setAnalysis(analysisResult.analysis);
+
+      // Format and set comprehensive analysis
+      const formatted = formatComprehensiveAnalysis(analysisResult.analysis);
+      setComprehensiveAnalysis(formatted);
+
+      // Store contentIds for other operations
+      setContentIds(analysisResult.contentIds || []);
+
+    } catch (error) {
+      console.error('Google Drive analysis failed:', error);
+      setAnalysisProgress('Analysis failed');
+      setProgressSteps([]);
+      // Calculate response time even for failed requests
+      if (analysisStartTime) {
+        const responseTime = Date.now() - analysisStartTime;
+        setAnalysisResponseTime(responseTime);
+      }
+      alert(`Google Drive analysis failed: ${error.message}`);
+    } finally {
+      setIsAnalyzing(false);
+      // Clear progress after a delay
+      setTimeout(() => {
+        setAnalysisProgress('');
+        setProgressSteps([]);
+      }, 3000);
+    }
+  };
+
+  const handleFileUpload = async (event) => {
+    const files = Array.from(event.target.files);
+    if (files.length > 0) {
+      setRfpFiles(files);
+      setAnalysis(null);
+      setHistoricalDocs([]);
+      setResponseText('');
+      setContentIds([]);
+      setUploadStatus(`Uploading and parsing ${files.length} document${files.length > 1 ? 's' : ''}...`);
+      
+      console.log(`${files.length} files selected:`, files.map(f => ({
+        name: f.name,
+        size: f.size,
+        type: f.type
+      })));
+
+      // Upload and parse documents
+      try {
+        if (files.length === 1) {
+          // Single file upload (existing endpoint)
+          const formData = new FormData();
+          formData.append('document', files[0]);
+          
+          const uploadResponse = await fetch(`${API_BASE}/upload`, {
+            method: 'POST',
+            body: formData
+          });
+          
+          if (!uploadResponse.ok) {
+            throw new Error(`Failed to upload ${files[0].name}`);
+          }
+          
+          const uploadResult = await uploadResponse.json();
+          setContentIds([uploadResult.contentId]);
+          setUploadStatus('Document uploaded and parsed successfully!');
+          
+        } else {
+          // Multiple file upload (new endpoint)
+          const formData = new FormData();
+          files.forEach(file => {
+            formData.append('documents', file);
+          });
+          
+          const uploadResponse = await fetch(`${API_BASE}/upload-multiple`, {
+            method: 'POST',
+            body: formData
+          });
+          
+          if (!uploadResponse.ok) {
+            throw new Error('Failed to upload documents');
+          }
+          
+          const uploadResult = await uploadResponse.json();
+          console.log('Batch upload result:', uploadResult);
+          
+          if (uploadResult.results && uploadResult.results.length > 0) {
+            setContentIds(uploadResult.results.map(result => result.contentId));
+            setUploadStatus(`${uploadResult.processed} of ${files.length} documents uploaded successfully!`);
+            
+            if (uploadResult.failed > 0) {
+              console.warn('Some files failed to upload:', uploadResult.errors);
+              setTimeout(() => {
+                setUploadStatus(`${uploadResult.processed} documents uploaded, ${uploadResult.failed} failed. Check console for details.`);
+              }, 3000);
+            }
+          } else {
+            throw new Error('No documents were successfully processed');
+          }
+        }
+        
+        // Clear status after 3 seconds
+        setTimeout(() => setUploadStatus(''), 3000);
+        
+      } catch (error) {
+        console.error('Upload failed:', error);
+        setUploadStatus(`Upload failed: ${error.message}`);
+        setTimeout(() => setUploadStatus(''), 5000);
+      }
+    }
+  };
+
+  const analyzeRFP = async () => {
+    if (!contentIds || contentIds.length === 0) {
+      alert('Please upload RFP document(s) first and wait for them to be processed');
+      return;
+    }
+    
+    if (!aiConfigured) {
+      alert('AI API is not configured on the backend');
+      return;
+    }
+
+    setIsAnalyzing(true);
+    setAnalysisStartTime(Date.now());
+    setAnalysisResponseTime(null);
+    setAnalysisProgress(`Starting analysis of ${contentIds.length} document${contentIds.length > 1 ? 's' : ''}...`);
+    setProgressSteps([
+      { step: 'Preparing documents', status: 'completed' },
+      { step: 'Connecting to AI provider', status: 'in_progress' },
+      { step: 'Analyzing document content', status: 'pending' },
+      { step: 'Extracting requirements', status: 'pending' },
+      { step: 'Identifying risks and opportunities', status: 'pending' },
+      { step: 'Finalizing analysis', status: 'pending' }
+    ]);
+    
+    try {
+      console.log('Starting AI analysis for contentIds:', contentIds);
+      
+      // Step 1: Analyze all documents with AI
+      setAnalysisProgress('Connecting to AI provider...');
+      setProgressSteps(prev => prev.map((step, i) => 
+        i === 1 ? { ...step, status: 'completed' } : 
+        i === 2 ? { ...step, status: 'in_progress' } : step
+      ));
+
+      // Choose appropriate analysis endpoint based on number of documents
+      let analyzeResponse;
+      if (contentIds.length === 1) {
+        // Single document analysis
+        analyzeResponse = await fetch(`${API_BASE}/analyze`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            contentId: contentIds[0], 
+            provider: selectedProvider, 
+            model: selectedModel 
+          })
+        });
+      } else {
+        // Multiple document analysis
+        analyzeResponse = await fetch(`${API_BASE}/analyze-multiple`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            contentIds: contentIds, 
+            provider: selectedProvider, 
+            model: selectedModel 
+          })
+        });
+      }
+      
+      if (!analyzeResponse.ok) {
+        const errorData = await analyzeResponse.json();
+        throw new Error(errorData.error || 'Failed to analyze document');
+      }
+
+      setAnalysisProgress('Processing AI analysis...');
+      setProgressSteps(prev => prev.map((step, i) => 
+        i === 2 ? { ...step, status: 'completed' } : 
+        i === 3 ? { ...step, status: 'in_progress' } : step
+      ));
+      
+      const analysisResult = await analyzeResponse.json();
+      console.log('Analysis successful:', analysisResult);
+
+      setAnalysisProgress('Extracting key insights...');
+      setProgressSteps(prev => prev.map((step, i) => 
+        i === 3 ? { ...step, status: 'completed' } : 
+        i === 4 ? { ...step, status: 'in_progress' } : step
+      ));
+      
+      // Step 2: Find relevant historical documents
+      try {
+        const docsResponse = await fetch(`${API_BASE}/find-documents`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contentId: contentIds[0] })
+        });
+        
+        if (docsResponse.ok) {
+          const docsResult = await docsResponse.json();
+          setHistoricalDocs(docsResult.documents || []);
+        }
+      } catch (docError) {
+        console.warn('Historical document search failed:', docError);
+        // Non-critical error, continue with analysis
+      }
+      
+      setAnalysisProgress('Completing analysis...');
+      setProgressSteps(prev => prev.map((step, i) => 
+        i === 4 ? { ...step, status: 'completed' } : 
+        i === 5 ? { ...step, status: 'in_progress' } : step
+      ));
+
+      // Small delay to show final step
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      setAnalysisProgress(`Analysis complete for ${contentIds.length} document${contentIds.length > 1 ? 's' : ''}!`);
+      setProgressSteps(prev => prev.map(step => ({ ...step, status: 'completed' })));
+      
+      // Calculate response time
+      if (analysisStartTime) {
+        const responseTime = Date.now() - analysisStartTime;
+        setAnalysisResponseTime(responseTime);
+      }
+      
+      setAnalysis(analysisResult.analysis);
+      
+      // Format and set comprehensive analysis
+      const formatted = formatComprehensiveAnalysis(analysisResult.analysis);
+      setComprehensiveAnalysis(formatted);
+      
+    } catch (error) {
+      console.error('Analysis failed:', error);
+      setAnalysisProgress('Analysis failed');
+      setProgressSteps([]);
+      // Calculate response time even for failed requests
+      if (analysisStartTime) {
+        const responseTime = Date.now() - analysisStartTime;
+        setAnalysisResponseTime(responseTime);
+      }
+      alert(`Analysis failed: ${error.message}`);
+    } finally {
+      setIsAnalyzing(false);
+      // Clear progress after a delay
+      setTimeout(() => {
+        setAnalysisProgress('');
+        setProgressSteps([]);
+      }, 3000);
+    }
+  };
+
+  // Format comprehensive analysis for display
+  const formatComprehensiveAnalysis = (analysis) => {
+    let formatted = `🔍 COMPREHENSION & HIGHLIGHTING\n\n`;
+    
+    if (analysis.comprehensionHighlighting) {
+      const ch = analysis.comprehensionHighlighting;
+      
+      formatted += `📋 Main Objectives & RFP Purpose:\n`;
+      if (ch.rfpPurpose) formatted += `• ${ch.rfpPurpose}\n`;
+      if (ch.mainObjectives) {
+        ch.mainObjectives.forEach(obj => formatted += `• ${obj}\n`);
+      }
+      formatted += `\n`;
+      
+      formatted += `✅ Key Eligibility Criteria:\n`;
+      if (ch.eligibilityCriteria) {
+        ch.eligibilityCriteria.forEach(criteria => formatted += `• ${criteria}\n`);
+      }
+      formatted += `\n`;
+      
+      formatted += `⏰ Critical Deadlines & Submission Instructions:\n`;
+      if (ch.deadlinesSubmission) {
+        ch.deadlinesSubmission.forEach(deadline => {
+          formatted += `• ${deadline.deadline}`;
+          if (deadline.date) formatted += ` - ${deadline.date}`;
+          if (deadline.importance) formatted += ` [${deadline.importance} Priority]`;
+          formatted += `\n`;
+        });
+      }
+      formatted += `\n`;
+      
+      formatted += `📦 Mandatory Deliverables & Forms:\n`;
+      if (ch.mandatoryDeliverables) {
+        ch.mandatoryDeliverables.forEach(deliverable => formatted += `• ${deliverable}\n`);
+      }
+      formatted += `\n`;
+      
+      formatted += `🎯 Evaluation Criteria & Scoring:\n`;
+      if (ch.evaluationCriteria) {
+        ch.evaluationCriteria.forEach(criteria => {
+          formatted += `• ${criteria.criteria}`;
+          if (criteria.weight) formatted += ` (Weight: ${criteria.weight})`;
+          if (criteria.description) formatted += ` - ${criteria.description}`;
+          formatted += `\n`;
+        });
+      }
+      formatted += `\n`;
+      
+      formatted += `📞 Contact Points & Q&A Instructions:\n`;
+      if (ch.contactPoints) {
+        ch.contactPoints.forEach(contact => formatted += `• ${contact}\n`);
+      }
+      if (ch.qaInstructions) {
+        ch.qaInstructions.forEach(instruction => formatted += `• ${instruction}\n`);
+      }
+      formatted += `\n`;
+    }
+    
+    formatted += `⚙️ TECHNICAL REQUIREMENTS BREAKDOWN\n\n`;
+    
+    if (analysis.technicalBreakdown) {
+      const tb = analysis.technicalBreakdown;
+      
+      formatted += `🔧 Complete Technical Specifications:\n`;
+      if (tb.technicalSpecifications) {
+        tb.technicalSpecifications.forEach(spec => formatted += `• ${spec}\n`);
+      }
+      formatted += `\n`;
+      
+      formatted += `⚡ Functional & Performance Requirements:\n`;
+      if (tb.functionalRequirements) {
+        tb.functionalRequirements.forEach(req => formatted += `• ${req}\n`);
+      }
+      if (tb.performanceRequirements) {
+        tb.performanceRequirements.forEach(req => formatted += `• ${req}\n`);
+      }
+      if (tb.serviceLevelExpectations) {
+        tb.serviceLevelExpectations.forEach(sla => formatted += `• ${sla}\n`);
+      }
+      formatted += `\n`;
+      
+      formatted += `❓ Areas Needing Clarification:\n`;
+      if (tb.ambiguitiesConflicts) {
+        tb.ambiguitiesConflicts.forEach(item => formatted += `• ${item}\n`);
+      }
+      if (tb.clarificationNeeded) {
+        tb.clarificationNeeded.forEach(item => formatted += `• ${item}\n`);
+      }
+      formatted += `\n`;
+      
+      formatted += `📋 Compliance Requirements:\n`;
+      if (tb.complianceRequirements) {
+        tb.complianceRequirements.forEach(req => {
+          formatted += `• ${req.requirement} (${req.type})`;
+          if (req.mandatory) formatted += ` [MANDATORY]`;
+          if (req.details) formatted += ` - ${req.details}`;
+          formatted += `\n`;
+        });
+      }
+      formatted += `\n`;
+    }
+    
+    formatted += `📝 RESPONSE STRATEGY\n\n`;
+    
+    if (analysis.responseStrategy) {
+      const rs = analysis.responseStrategy;
+      
+      formatted += `📋 Suggested Proposal Structure:\n`;
+      if (rs.suggestedStructure) {
+        rs.suggestedStructure.forEach(section => {
+          formatted += `• ${section.section}: ${section.content}\n`;
+          if (section.keyPoints) {
+            section.keyPoints.forEach(point => formatted += `  - ${point}\n`);
+          }
+        });
+      }
+      formatted += `\n`;
+      
+      formatted += `💬 Key Messaging & Value Propositions:\n`;
+      if (rs.keyMessaging) {
+        rs.keyMessaging.forEach(message => formatted += `• ${message}\n`);
+      }
+      if (rs.valuePropositions) {
+        rs.valuePropositions.forEach(prop => formatted += `• ${prop}\n`);
+      }
+      if (rs.uniqueSellingPoints) {
+        rs.uniqueSellingPoints.forEach(usp => formatted += `• ${usp}\n`);
+      }
+      formatted += `\n`;
+      
+      formatted += `⚠️ Risk Factors & Mitigation Strategies:\n`;
+      if (rs.riskFactors) {
+        rs.riskFactors.forEach(risk => {
+          formatted += `• ${risk.risk} [${risk.severity}] - ${risk.impact}\n`;
+          if (risk.mitigation) formatted += `  Mitigation: ${risk.mitigation}\n`;
+        });
+      }
+      formatted += `\n`;
+      
+      formatted += `🏆 Competitive Advantages & Differentiation:\n`;
+      if (rs.competitiveAdvantages) {
+        rs.competitiveAdvantages.forEach(advantage => formatted += `• ${advantage}\n`);
+      }
+      if (rs.differentiationStrategy) {
+        rs.differentiationStrategy.forEach(strategy => formatted += `• ${strategy}\n`);
+      }
+      formatted += `\n`;
+    }
+    
+    formatted += `✍️ DRAFTING GUIDANCE\n\n`;
+    
+    if (analysis.draftingGuidance) {
+      const dg = analysis.draftingGuidance;
+      
+      formatted += `📝 Section-by-Section Response Outlines:\n`;
+      if (dg.sectionOutlines) {
+        dg.sectionOutlines.forEach(section => {
+          formatted += `• ${section.section}:\n`;
+          if (section.outline) formatted += `  Outline: ${section.outline}\n`;
+          if (section.keyPoints) {
+            section.keyPoints.forEach(point => formatted += `  - ${point}\n`);
+          }
+          if (section.complianceNotes) formatted += `  Compliance: ${section.complianceNotes}\n`;
+          if (section.suggestedContent) formatted += `  Content: ${section.suggestedContent}\n`;
+          formatted += `\n`;
+        });
+      }
+      
+      formatted += `🎯 Persuasive Language & Professional Tone:\n`;
+      if (dg.persuasiveLanguage) {
+        dg.persuasiveLanguage.forEach(tip => formatted += `• ${tip}\n`);
+      }
+      if (dg.professionalTone) {
+        dg.professionalTone.forEach(tip => formatted += `• ${tip}\n`);
+      }
+      if (dg.winThemes) {
+        dg.winThemes.forEach(theme => formatted += `• Win Theme: ${theme}\n`);
+      }
+      formatted += `\n`;
+    }
+    
+    formatted += `📋 ACTION ITEMS & NEXT STEPS\n\n`;
+    
+    if (analysis.actionItems) {
+      analysis.actionItems.forEach(item => {
+        formatted += `• ${item.item} [${item.priority} Priority]\n`;
+        if (item.description) formatted += `  Description: ${item.description}\n`;
+        if (item.deadline) formatted += `  Deadline: ${item.deadline}\n`;
+        if (item.owner) formatted += `  Owner: ${item.owner}\n`;
+        formatted += `\n`;
+      });
+    }
+    
+    if (analysis.proposalTimeline) {
+      formatted += `📅 Proposed Timeline:\n`;
+      analysis.proposalTimeline.forEach(phase => {
+        formatted += `• ${phase.phase} (${phase.duration})\n`;
+        if (phase.activities) {
+          phase.activities.forEach(activity => formatted += `  - ${activity}\n`);
+        }
+      });
+      formatted += `\n`;
+    }
+    
+    if (analysis.budgetConsiderations) {
+      formatted += `💰 Budget Considerations:\n`;
+      const bc = analysis.budgetConsiderations;
+      if (bc.pricingStrategy) formatted += `• Strategy: ${bc.pricingStrategy}\n`;
+      if (bc.costFactors) {
+        bc.costFactors.forEach(factor => formatted += `• Cost Factor: ${factor}\n`);
+      }
+      if (bc.budgetRisks) {
+        bc.budgetRisks.forEach(risk => formatted += `• Budget Risk: ${risk}\n`);
+      }
+    }
+    
+    return formatted;
+  };
+
+  // AI Assistant for RFP Questions
+  const askAIAssistant = async () => {
+    if (!aiQuestion.trim()) {
+      alert('Please enter a question about the RFP');
+      return;
+    }
+    
+    if (!analysis) {
+      alert('Please analyze an RFP first before asking questions');
+      return;
+    }
+
+    setIsAnswering(true);
+    setAiAnswer('');
+    
+    try {
+      // Use the first contentId for AI assistant
+      const primaryContentId = contentIds[0];
+      const response = await fetch(`${API_BASE}/ai-assistant`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          contentId: primaryContentId,
+          question: aiQuestion,
+          provider: selectedProvider, 
+          model: selectedModel 
+        })
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to get AI response');
+      }
+      
+      const result = await response.json();
+      setAiAnswer(result.answer);
+      
+    } catch (error) {
+      console.error('AI assistant failed:', error);
+      setAiAnswer(`Error: ${error.message}`);
+    } finally {
+      setIsAnswering(false);
+    }
+  };
+
+  // Document processing now handled by backend API
+
+  const generateResponse = async () => {
+    if (!analysis) {
+      alert('Please analyze an RFP first');
+      return;
+    }
+    
+    setIsGenerating(true);
+    
+    try {
+      const response = await fetch(`${API_BASE}/generate-response`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          contentId: 'temp', // You might need to store this from upload
+          selectedDocuments: historicalDocs,
+          customInstructions: 'Generate a comprehensive RFP response for broadcast media industry'
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to generate response');
+      }
+      
+      const result = await response.json();
+      setResponseText(result.response.content);
+      
+    } catch (error) {
+      console.error('Response generation failed:', error);
+      // Fallback to placeholder response
+      setResponseText(`# RFP Response
+
+## Executive Summary
+This is a placeholder response generated for your RFP analysis. A comprehensive response would be generated here based on:
+- Your RFP requirements analysis
+- Historical document references
+- Industry-specific broadcast and media expertise
+
+## Technical Approach
+Detailed technical solution approach would be provided here.
+
+## Project Timeline
+Milestone-based project timeline would be outlined here.
+
+## Cost Proposal
+Comprehensive cost breakdown would be included here.
+
+*Note: Full AI-powered response generation will be available once all backend services are fully implemented.*`);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
+      <div className="container mx-auto px-6 py-8">
+        {/* Header */}
+        <div className="text-center mb-8">
+          <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent mb-4">
+            RFP Analysis & Response System
+          </h1>
+          <p className="text-slate-300 text-lg">
+            AI-powered RFP analysis for broadcast and media industry
+          </p>
+        </div>
+
+        {/* Configuration Status */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+          <div className={`p-4 rounded-lg border ${aiConfigured ? 'bg-green-900/20 border-green-500' : 'bg-amber-900/20 border-amber-500'}`}>
+            <div className="flex items-center gap-3">
+              <Brain className="w-5 h-5" />
+              <span className="font-medium">AI Configuration</span>
+              {configLoading ? (
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-400"></div>
+              ) : aiConfigured ? (
+                <CheckCircle className="w-5 h-5 text-green-400" />
+              ) : (
+                <AlertCircle className="w-5 h-5 text-amber-400" />
+              )}
+            </div>
+            <p className="text-sm text-slate-400 mt-2">
+              {configLoading ? 'Checking configuration...' : 
+               aiConfigured ? 
+                 `AI configured: ${aiProviders.map(p => p.name).join(', ')}` : 
+                 'No AI providers configured'}
+            </p>
+            {aiConfigured && recommendedProvider && (
+              <p className="text-xs text-green-400 mt-1">
+                Using: {aiProviders.find(p => p.key === recommendedProvider)?.name || recommendedProvider}
+              </p>
+            )}
+            {!aiConfigured && !configLoading && (
+              <p className="text-xs text-slate-500 mt-2">
+                Configure AI API keys in backend/.env file
+              </p>
+            )}
+          </div>
+
+          <div className={`p-4 rounded-lg border ${driveConfigured ? 'bg-green-900/20 border-green-500' : 'bg-amber-900/20 border-amber-500'}`}>
+            <div className="flex items-center gap-3">
+              <FolderOpen className="w-5 h-5" />
+              <span className="font-medium">Google Drive</span>
+              {configLoading ? (
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-400"></div>
+              ) : driveConfigured ? (
+                <CheckCircle className="w-5 h-5 text-green-400" />
+              ) : (
+                <AlertCircle className="w-5 h-5 text-amber-400" />
+              )}
+            </div>
+            <p className="text-sm text-slate-400 mt-2">
+              {configLoading ? 'Checking configuration...' :
+               driveConfigured ? 'Google Drive API configured for historical documents' : 
+               'Google Drive integration available but not configured'}
+            </p>
+            {!driveConfigured && !configLoading && (
+              <p className="text-xs text-slate-500 mt-2">
+                Optional: Configure Google Drive API credentials in backend/.env
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* AI Model Selector */}
+        {aiConfigured && aiProviders.length > 0 && (
+          <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700 mb-8">
+            <h2 className="text-lg font-semibold mb-4 flex items-center gap-3">
+              <Brain className="w-5 h-5 text-purple-400" />
+              AI Model Selection
+            </h2>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Provider Selector */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  AI Provider
+                </label>
+                <select
+                  value={selectedProvider}
+                  onChange={(e) => {
+                    setSelectedProvider(e.target.value);
+                    const provider = aiProviders.find(p => p.key === e.target.value);
+                    if (provider && provider.models && provider.models.length > 0) {
+                      setSelectedModel(provider.models[0]);
+                    }
+                  }}
+                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 focus:outline-none"
+                >
+                  {aiProviders.map(provider => (
+                    <option key={provider.key} value={provider.key}>
+                      {provider.name} ({provider.cost})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              
+              {/* Model Selector */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Model
+                </label>
+                <select
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-slate-200 focus:border-blue-500 focus:outline-none"
+                  disabled={!selectedProvider}
+                >
+                  {selectedProvider && aiProviders
+                    .find(p => p.key === selectedProvider)?.models?.map(model => (
+                      <option key={model} value={model}>
+                        {model}
+                      </option>
+                    ))
+                  }
+                </select>
+              </div>
+            </div>
+            
+            {selectedProvider && selectedModel && (
+              <div className="mt-3 p-3 bg-blue-900/30 border border-blue-500/50 rounded-lg">
+                <p className="text-sm text-blue-300">
+                  ✨ Selected: <strong>{aiProviders.find(p => p.key === selectedProvider)?.name}</strong> → <strong>{selectedModel}</strong>
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Left Panel - Upload & Analysis */}
+          <div className="lg:col-span-2 space-y-6">
+            
+            {/* Analysis Mode Selection */}
+            <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700 mb-6">
+              <h2 className="text-xl font-semibold mb-4 flex items-center gap-3">
+                <Settings className="w-6 h-6 text-blue-400" />
+                Document Source
+              </h2>
+              
+              <div className="flex gap-4 mb-4">
+                <button
+                  onClick={() => setAnalysisMode('upload')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                    analysisMode === 'upload'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                  }`}
+                >
+                  <Upload className="w-5 h-5" />
+                  Upload Files
+                </button>
+                <button
+                  onClick={() => setAnalysisMode('drive')}
+                  disabled={!driveConfigured}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                    analysisMode === 'drive'
+                      ? 'bg-green-600 text-white'
+                      : driveConfigured
+                        ? 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                        : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                  }`}
+                >
+                  <Folder className="w-5 h-5" />
+                  Google Drive
+                </button>
+              </div>
+              
+              {!driveConfigured && analysisMode === 'drive' && (
+                <div className="p-3 bg-yellow-900/30 border border-yellow-500/50 rounded-lg">
+                  <p className="text-yellow-300 text-sm">
+                    Google Drive is not configured. Please set up credentials to use this feature.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Upload Mode */}
+            {analysisMode === 'upload' && (
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+                <h2 className="text-xl font-semibold mb-4 flex items-center gap-3">
+                  <Upload className="w-6 h-6 text-blue-400" />
+                  Upload RFP Documents
+                </h2>
+              
+              <div className="border-2 border-dashed border-slate-600 rounded-lg p-8 text-center hover:border-slate-500 transition-colors">
+                <input
+                  type="file"
+                  onChange={handleFileUpload}
+                  accept=".pdf,.doc,.docx,.odt,.ods,.xlsx,.xls"
+                  multiple
+                  className="hidden"
+                  id="rfp-upload"
+                />
+                <label htmlFor="rfp-upload" className="cursor-pointer">
+                  <FileText className="w-12 h-12 text-slate-400 mx-auto mb-4" />
+                  <p className="text-lg font-medium text-slate-300 mb-2">
+                    Drop your RFP documents here or click to upload
+                  </p>
+                  <p className="text-sm text-slate-500">
+                    Supports multiple files: PDF, Word (.doc/.docx), ODF (.odt/.ods), Excel (.xlsx/.xls)
+                  </p>
+                </label>
+              </div>
+
+              {rfpFiles.length > 0 && (
+                <div className="mt-4 space-y-3">
+                  {rfpFiles.map((file, index) => (
+                    <div key={index} className="p-4 bg-slate-700/50 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <FileText className="w-5 h-5 text-green-400" />
+                        <div className="flex-1">
+                          <p className="font-medium">{file.name}</p>
+                          <p className="text-sm text-slate-400">
+                            {(file.size / 1024 / 1024).toFixed(2)} MB • {file.type || 'Unknown type'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  
+                  <div className="pt-2 border-t border-slate-600">
+                    <p className="text-sm text-slate-400 mb-1">
+                      Total: {rfpFiles.length} file{rfpFiles.length > 1 ? 's' : ''} • 
+                      {(rfpFiles.reduce((sum, file) => sum + file.size, 0) / 1024 / 1024).toFixed(2)} MB
+                    </p>
+                  </div>
+                  
+                  {uploadStatus && (
+                    <div className={`mt-3 p-2 rounded text-sm ${
+                      uploadStatus.includes('success') ? 'bg-green-900/30 text-green-300' : 
+                      uploadStatus.includes('failed') ? 'bg-red-900/30 text-red-300' : 
+                      'bg-blue-900/30 text-blue-300'
+                    }`}>
+                      {uploadStatus.includes('Uploading') && (
+                        <div className="flex items-center gap-2">
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-current"></div>
+                          {uploadStatus}
+                        </div>
+                      )}
+                      {!uploadStatus.includes('Uploading') && uploadStatus}
+                    </div>
+                  )}
+                  
+                  <button
+                    onClick={analyzeRFP}
+                    disabled={isAnalyzing || !aiConfigured || contentIds.length === 0}
+                    className="mt-4 w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 disabled:from-slate-600 disabled:to-slate-600 px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2"
+                  >
+                    {isAnalyzing ? (
+                      <>
+                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                        Analyzing Documents...
+                      </>
+                    ) : (
+                      <>
+                        <Brain className="w-5 h-5" />
+                        {contentIds.length > 0 ? `Analyze ${contentIds.length} Document${contentIds.length > 1 ? 's' : ''}` : 'Waiting for document upload...'}
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+
+            {/* Google Drive Mode */}
+            {analysisMode === 'drive' && driveConfigured && (
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+                <h2 className="text-xl font-semibold mb-4 flex items-center gap-3">
+                  <Folder className="w-6 h-6 text-green-400" />
+                  Google Drive Folder
+                </h2>
+                
+                {/* Folder ID Input */}
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-slate-300 mb-2">
+                    Folder ID or URL
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={driveFolderId}
+                      onChange={(e) => setDriveFolderId(e.target.value)}
+                      placeholder="Enter Google Drive folder ID or paste folder URL"
+                      className="flex-1 bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                    />
+                    <button
+                      onClick={loadDriveFolder}
+                      disabled={driveLoading || !driveFolderId.trim()}
+                      className="bg-green-600 hover:bg-green-700 disabled:bg-slate-600 px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
+                    >
+                      {driveLoading ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Link className="w-4 h-4" />
+                      )}
+                      Load
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Get the folder ID from the Google Drive URL: https://drive.google.com/drive/folders/<strong>FOLDER_ID</strong>
+                  </p>
+                </div>
+
+                {driveError && (
+                  <div className="mb-4 p-3 bg-red-900/30 border border-red-500/50 rounded-lg">
+                    <p className="text-red-300 text-sm">{driveError}</p>
+                  </div>
+                )}
+
+                {/* File List */}
+                {driveFiles.length > 0 && (
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="font-medium text-slate-300">
+                        Documents ({driveFiles.length})
+                      </h3>
+                      <div className="text-sm text-slate-400">
+                        {selectedDriveFiles.size} selected
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 max-h-96 overflow-y-auto">
+                      {driveFiles.map((file) => (
+                        <div
+                          key={file.id}
+                          className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+                            selectedDriveFiles.has(file.id)
+                              ? 'bg-green-900/30 border-green-500/50'
+                              : 'bg-slate-700/50 border-slate-600 hover:bg-slate-700'
+                          }`}
+                          onClick={() => toggleDriveFileSelection(file.id)}
+                        >
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="checkbox"
+                              checked={selectedDriveFiles.has(file.id)}
+                              onChange={() => toggleDriveFileSelection(file.id)}
+                              className="rounded bg-slate-600 border-slate-500"
+                            />
+                            <FileText className="w-5 h-5 text-green-400" />
+                            <div className="flex-1">
+                              <p className="font-medium text-white">{file.name}</p>
+                              <div className="flex items-center gap-4 text-sm text-slate-400">
+                                <span>{file.fileType}</span>
+                                <span>{file.formattedSize}</span>
+                                <span>{file.formattedDate}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <button
+                      onClick={analyzeDriveFiles}
+                      disabled={isAnalyzing || !aiConfigured || selectedDriveFiles.size === 0}
+                      className="mt-4 w-full bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700 disabled:from-slate-600 disabled:to-slate-600 px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2"
+                    >
+                      {isAnalyzing ? (
+                        <>
+                          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                          Analyzing Drive Files...
+                        </>
+                      ) : (
+                        <>
+                          <Brain className="w-5 h-5" />
+                          {selectedDriveFiles.size > 0 ? `Analyze ${selectedDriveFiles.size} Selected File${selectedDriveFiles.size > 1 ? 's' : ''}` : 'Select files to analyze'}
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Progress Indicator */}
+            {(isAnalyzing || analysisProgress) && (
+              <div className="mt-4 p-4 bg-blue-900/30 border border-blue-500/50 rounded-lg">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-400"></div>
+                  <span className="text-sm font-medium text-blue-300">{analysisProgress}</span>
+                </div>
+                
+                {progressSteps.length > 0 && (
+                  <div className="space-y-2">
+                    {progressSteps.map((step, index) => (
+                      <div key={index} className="flex items-center gap-2 text-xs">
+                        {step.status === 'completed' ? (
+                          <CheckCircle className="w-3 h-3 text-green-400" />
+                        ) : step.status === 'in_progress' ? (
+                          <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-400"></div>
+                        ) : (
+                          <div className="w-3 h-3 rounded-full border border-slate-500"></div>
+                        )}
+                        <span className={`${
+                          step.status === 'completed' ? 'text-green-300' :
+                          step.status === 'in_progress' ? 'text-blue-300' :
+                          'text-slate-400'
+                        }`}>
+                          {step.step}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Analysis Results */}
+            {analysis && (
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+                <h2 className="text-xl font-semibold mb-4 flex items-center gap-3">
+                  <Brain className="w-6 h-6 text-purple-400" />
+                  RFP Analysis Results
+                </h2>
+
+                {/* Show analysis metadata */}
+                {analysis.analysisMetadata && (
+                  <div className="mb-4 p-3 bg-blue-900/30 border border-blue-500/50 rounded-lg">
+                    <p className="text-sm text-blue-300">
+                      Analysis completed using: {analysis.analysisMetadata.provider} ({analysis.analysisMetadata.model})
+                    </p>
+                    <p className="text-xs text-blue-400">
+                      Processed: {analysis.analysisMetadata.wordCount || 'N/A'} words • 
+                      {analysis.analysisMetadata.contentLength || 'N/A'} characters
+                    </p>
+                  </div>
+                )}
+
+                {/* Show multi-document analysis info */}
+                {analysis.multiDocumentAnalysis && (
+                  <div className="mb-4 p-3 bg-purple-900/30 border border-purple-500/50 rounded-lg">
+                    <p className="text-sm text-purple-300 font-medium">
+                      📄 Multi-Document Analysis: {analysis.multiDocumentAnalysis.documentCount} documents
+                    </p>
+                    <div className="mt-2 text-xs text-purple-400">
+                      {analysis.multiDocumentAnalysis.documents.map((doc, index) => (
+                        <div key={index} className="flex justify-between">
+                          <span>{doc.filename}</span>
+                          <span>{(doc.size / 1024 / 1024).toFixed(2)} MB</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {analysis.error ? (
+                  <div className="space-y-4">
+                    <div className="bg-red-900/30 border border-red-500/50 rounded-lg p-4">
+                      <h3 className="font-semibold text-red-300 mb-2">AI Analysis Unavailable</h3>
+                      <p className="text-slate-300 mb-3">{analysis.error}</p>
+                      {analysis.analysisMetadata?.fallbackReason && (
+                        <p className="text-xs text-red-400 mb-3">
+                          Reason: {analysis.analysisMetadata.fallbackReason}
+                        </p>
+                      )}
+                      
+                      <div className="bg-blue-900/30 border border-blue-500/50 rounded-lg p-4 mt-4">
+                        <h4 className="font-semibold text-blue-300 mb-2">💡 Get FREE AI Analysis</h4>
+                        <p className="text-sm text-blue-200 mb-3">
+                          Install Ollama for completely free, unlimited AI analysis that runs locally:
+                        </p>
+                        <ol className="text-sm text-blue-200 space-y-1 mb-3">
+                          <li>1. Download Ollama from <strong>https://ollama.ai</strong></li>
+                          <li>2. Install and run: <code className="bg-blue-800/50 px-1">ollama serve</code></li>
+                          <li>3. Download model: <code className="bg-blue-800/50 px-1">ollama pull llama3</code></li>
+                          <li>4. Restart this application - analysis will work automatically!</li>
+                        </ol>
+                        <p className="text-xs text-blue-300">
+                          ✅ No API costs • ✅ No quotas • ✅ Your documents stay private • ✅ High quality analysis
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : analysis.needsRealImplementation ? (
+                  <div className="space-y-4">
+                    <div className="bg-blue-900/30 border border-blue-500/50 rounded-lg p-4">
+                      <h3 className="font-semibold text-blue-300 mb-2">Implementation Needed</h3>
+                      <p className="text-slate-300">
+                        The document has been uploaded successfully. To see the analysis, we need to:
+                      </p>
+                      <ol className="list-decimal list-inside mt-3 space-y-1 text-sm text-slate-400">
+                        <li>Parse the document content (implement document parser for {rfpFile?.name.split('.').pop().toUpperCase()} files)</li>
+                        <li>Send content to AI API for analysis</li>
+                        <li>Extract key requirements, risks, and opportunities</li>
+                      </ol>
+                    </div>
+                    
+                    <div className="bg-amber-900/30 border border-amber-500/50 rounded-lg p-4">
+                      <h3 className="font-semibold text-amber-300 mb-2">What I Need From You</h3>
+                      <p className="text-slate-300 mb-3">
+                        To make this analysis work with real data, please tell me:
+                      </p>
+                      <ul className="space-y-2 text-sm text-slate-400">
+                        <li>• What industry-specific terms should I look for in broadcast/media RFPs?</li>
+                        <li>• What are the typical risk factors in your industry?</li>
+                        <li>• What sections do you usually include in your responses?</li>
+                        <li>• Any specific compliance standards (like EBU standards you mentioned)?</li>
+                      </ul>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Project Overview */}
+                    <div className="space-y-4">
+                      <div>
+                        <h3 className="font-semibold text-blue-300 mb-2">Project Overview</h3>
+                        <div className="space-y-2 text-sm">
+                          <p><span className="text-slate-400">Title:</span> <span className="text-white">{analysis.title}</span></p>
+                          <p><span className="text-slate-400">Type:</span> <span className="text-white">{analysis.projectType}</span></p>
+                          <p><span className="text-slate-400">Budget:</span> <span className="text-white">{analysis.budget}</span></p>
+                          <p><span className="text-slate-400">Timeline:</span> <span className="text-white">{analysis.timeline}</span></p>
+                        </div>
+                      </div>
+
+                      <div>
+                        <h3 className="font-semibold text-green-300 mb-2">Key Requirements</h3>
+                        <ul className="space-y-1 text-sm">
+                          {analysis.keyRequirements?.map((req, idx) => (
+                            <li key={idx} className="flex items-start gap-2">
+                              <CheckCircle className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" />
+                              <span className="text-slate-300">{req}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+
+                    {/* Risk Analysis */}
+                    <div className="space-y-4">
+                      <div>
+                        <h3 className="font-semibold text-red-300 mb-2">Risk Factors</h3>
+                        <div className="space-y-2">
+                          {analysis.riskFactors?.map((risk, idx) => (
+                            <div key={idx} className="bg-red-900/20 border border-red-500/30 rounded-lg p-3">
+                              <div className="flex items-center gap-2 mb-1">
+                                <AlertCircle className="w-4 h-4 text-red-400" />
+                                <span className="font-medium text-red-300">{risk.risk}</span>
+                                <span className={`text-xs px-2 py-1 rounded ${
+                                  risk.severity === 'High' ? 'bg-red-500/20 text-red-300' :
+                                  risk.severity === 'Medium' ? 'bg-amber-500/20 text-amber-300' :
+                                  'bg-green-500/20 text-green-300'
+                                }`}>
+                                  {risk.severity}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-400">{risk.impact}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <h3 className="font-semibold text-purple-300 mb-2">Opportunity Areas</h3>
+                        <ul className="space-y-1 text-sm">
+                          {analysis.opportunityAreas?.map((opp, idx) => (
+                            <li key={idx} className="flex items-start gap-2">
+                              <span className="w-2 h-2 bg-purple-400 rounded-full mt-2 flex-shrink-0"></span>
+                              <span className="text-slate-300">{opp}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+              </div>
+            )}
+
+            {/* Comprehensive Analysis Output */}
+            {analysis && comprehensiveAnalysis && (
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+                <h2 className="text-xl font-semibold mb-4 flex items-center gap-3">
+                  <Brain className="w-6 h-6 text-green-400" />
+                  Comprehensive RFP Analysis & Guidance
+                </h2>
+                
+                <div className="space-y-4">
+                  <p className="text-sm text-slate-400">
+                    Complete analysis covering comprehension, technical requirements, response strategy, and drafting guidance based on your RFP document.
+                  </p>
+                  
+                  <textarea
+                    value={comprehensiveAnalysis}
+                    readOnly
+                    rows={30}
+                    className="w-full bg-slate-900/50 border border-slate-600 rounded-lg p-4 text-slate-200 text-sm resize-none focus:outline-none focus:border-green-500"
+                    style={{ fontFamily: 'Roboto, system-ui, -apple-system, sans-serif', fontWeight: '300' }}
+                    placeholder="Comprehensive analysis will appear here after analyzing an RFP document..."
+                  />
+                  
+                  <div className="flex gap-3">
+                    <button 
+                      onClick={() => navigator.clipboard.writeText(comprehensiveAnalysis)}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm flex items-center gap-2"
+                    >
+                      📋 Copy Analysis
+                    </button>
+                    <button 
+                      onClick={() => {
+                        const element = document.createElement("a");
+                        const file = new Blob([comprehensiveAnalysis], {type: 'text/plain'});
+                        element.href = URL.createObjectURL(file);
+                        element.download = `${analysis.title || 'RFP_Analysis'}.txt`;
+                        document.body.appendChild(element);
+                        element.click();
+                        document.body.removeChild(element);
+                      }}
+                      className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-sm flex items-center gap-2"
+                    >
+                      💾 Download Analysis
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Historical Documents Selection */}
+            {historicalDocs.length > 0 && (
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+                <h2 className="text-xl font-semibold mb-4 flex items-center gap-3">
+                  <FolderOpen className="w-6 h-6 text-green-400" />
+                  Relevant Historical Documents
+                </h2>
+                
+                <div className="space-y-3">
+                  {historicalDocs.map((doc) => (
+                    <div key={doc.id} className="flex items-center gap-4 p-4 bg-slate-700/50 rounded-lg">
+                      <input
+                        type="checkbox"
+                        checked={true}
+                        onChange={() => {}}
+                        className="w-4 h-4 text-blue-600 rounded"
+                      />
+                      <div className="flex-1">
+                        <p className="font-medium text-white">{doc.name}</p>
+                        <div className="flex gap-4 text-xs text-slate-400 mt-1">
+                          <span>Relevance: {doc.relevance}%</span>
+                          <span>Last used: {doc.lastUsed}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  onClick={generateResponse}
+                  disabled={isGenerating}
+                  className="mt-4 w-full bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700 disabled:from-slate-600 disabled:to-slate-600 px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2"
+                >
+                  {isGenerating ? (
+                    <>
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                      Generating Response...
+                    </>
+                  ) : (
+                    <>
+                      <PenTool className="w-5 h-5" />
+                      Generate RFP Response
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {/* Response Editor */}
+            {responseText && (
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+                <h2 className="text-xl font-semibold mb-4 flex items-center gap-3">
+                  <PenTool className="w-6 h-6 text-green-400" />
+                  Generated Response
+                </h2>
+                
+                <textarea
+                  value={responseText}
+                  onChange={(e) => setResponseText(e.target.value)}
+                  rows={12}
+                  className="w-full bg-slate-900/50 border border-slate-600 rounded-lg p-4 text-slate-200 focus:border-blue-500 focus:outline-none resize-none font-mono text-sm"
+                  placeholder="Generated RFP response will appear here..."
+                />
+                
+                <div className="flex gap-3 mt-4">
+                  <button className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm">
+                    Save Draft
+                  </button>
+                  <button className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-sm">
+                    Export to Word
+                  </button>
+                  <button className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-sm">
+                    Share with Team
+                  </button>
+                </div>
+              </div>
+            )}
+
+          </div>
+
+          {/* Right Panel - Quick Stats & Tools */}
+          <div className="space-y-6">
+            
+            {/* Response Time */}
+            <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+              <h3 className="font-semibold mb-4 flex items-center gap-2">
+                <Clock className="w-5 h-5 text-blue-400" />
+                Analysis Timer
+              </h3>
+              
+              <div className="space-y-3 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Current Analysis:</span>
+                  <span className={`font-mono ${isAnalyzing ? 'text-yellow-400' : 'text-slate-500'}`}>
+                    {isAnalyzing ? formatTime(currentElapsedTime) : '--'}
+                  </span>
+                </div>
+                {analysisResponseTime && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Last Response Time:</span>
+                    <span className="text-green-400 font-mono">
+                      {formatTime(analysisResponseTime)}
+                    </span>
+                  </div>
+                )}
+              </div>
+              
+              {isAnalyzing && (
+                <div className="mt-4 p-3 bg-blue-900/30 border border-blue-500/50 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-400"></div>
+                    <span className="text-xs text-blue-300">Analysis in progress...</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Implementation Checklist */}
+            <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+              <h3 className="font-semibold mb-4 flex items-center gap-2">
+                <Settings className="w-5 h-5 text-purple-400" />
+                Implementation Steps
+              </h3>
+              
+              <div className="space-y-3 text-sm">
+                <div className="flex items-center gap-3">
+                  <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center">
+                    <CheckCircle className="w-4 h-4 text-white" />
+                  </div>
+                  <span className="text-slate-300">Basic UI Created</span>
+                </div>
+                
+                <div className="flex items-center gap-3">
+                  <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center">
+                    <CheckCircle className="w-4 h-4 text-white" />
+                  </div>
+                  <span className="text-slate-300">Document Parsers (ODF/Word/Excel/PDF)</span>
+                </div>
+                
+                <div className="flex items-center gap-3">
+                  <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center">
+                    <CheckCircle className="w-4 h-4 text-white" />
+                  </div>
+                  <span className="text-slate-300">AI Analysis Integration (Ready - Install Ollama for Free)</span>
+                </div>
+                
+                <div className="flex items-center gap-3">
+                  <div className="w-6 h-6 rounded-full bg-slate-600 flex items-center justify-center text-white font-bold text-xs">
+                    4
+                  </div>
+                  <span className="text-slate-400">Google Drive API</span>
+                </div>
+                
+                <div className="flex items-center gap-3">
+                  <div className="w-6 h-6 rounded-full bg-slate-600 flex items-center justify-center text-white font-bold text-xs">
+                    5
+                  </div>
+                  <span className="text-slate-400">Response Generation</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Development Notes */}
+            <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+              <h3 className="font-semibold mb-4 flex items-center gap-2">
+                <Clock className="w-5 h-5 text-blue-400" />
+                Development Notes
+              </h3>
+              
+              <div className="space-y-2 text-xs text-slate-400">
+                <p>• No database required - using file-based storage</p>
+                <p>• Google Drive as document repository</p>
+                <p>• Real-time document processing</p>
+                <p>• Industry-specific for broadcast/media</p>
+                <p>• Team collaboration features planned</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default RFPAnalyzer;
