@@ -102,7 +102,7 @@ tmp/
 temp/
 
 # Backend specific
-backend/server.log
+backend/*.log
 backend/data/cache/
 backend/data/embeddings/
 backend/data/uploads/
@@ -111,7 +111,11 @@ backend/data/analysis/
 backend/data/responses/
 
 # Frontend specific
-frontend/frontend.log
+frontend/*.log
+
+# Backup files
+*.backup
+*.bak
 frontend/.vite/
 
 # Package lock files (optional - some prefer to commit these)

@@ -786,76 +786,7 @@ const RFPAnalyzer = () => {
                 </div>
               </div>
             </div>
-
-            {/* Quick Actions */}
-            <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
-              <h3 className="font-semibold mb-4 flex items-center gap-2">
-                <Settings className="w-5 h-5 text-purple-400" />
-                Quick Actions
-              </h3>
-              
-              <div className="space-y-3">
-                <button 
-                  onClick={() => window.location.reload()}
-                  className="w-full text-left px-3 py-2 rounded-lg bg-slate-700/50 hover:bg-slate-700 transition-colors text-sm"
-                >
-                  🔄 Refresh Application
-                </button>
-                <button 
-                  onClick={checkConfiguration}
-                  className="w-full text-left px-3 py-2 rounded-lg bg-slate-700/50 hover:bg-slate-700 transition-colors text-sm"
-                >
-                  ⚙️ Check Configuration
-                </button>
-                <button 
-                  onClick={() => {
-                    setRfpFiles([]);
-                    setAnalysis(null);
-                    setResponseText('');
-                    setContentIds([]);
-                  }}
-                  className="w-full text-left px-3 py-2 rounded-lg bg-slate-700/50 hover:bg-slate-700 transition-colors text-sm"
-                >
-                  🗑️ Clear All Data
-                </button>
-              </div>
-            </div>
-
-            {/* Team Collaboration */}
-            <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
-              <h3 className="font-semibold mb-4 flex items-center gap-2">
-                <Users className="w-5 h-5 text-green-400" />
-                Team Features
-              </h3>
-              
-              <div className="space-y-2 text-sm text-slate-400">
-                <p>• Share analysis results</p>
-                <p>• Collaborative editing</p>
-                <p>• Version control</p>
-                <p>• Team templates</p>
-                <p>• Real-time comments</p>
-              </div>
-              
-              <button className="w-full mt-3 px-4 py-2 bg-green-600/20 border border-green-500/50 rounded-lg text-sm text-green-300 hover:bg-green-600/30 transition-colors">
-                Coming Soon
-              </button>
-            </div>
-
-            {/* Development Notes */}
-            <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
-              <h3 className="font-semibold mb-4 flex items-center gap-2">
-                <Clock className="w-5 h-5 text-blue-400" />
-                Development Notes
-              </h3>
-              
-              <div className="space-y-2 text-xs text-slate-400">
-                <p>• Multi-file upload and analysis ✅</p>
-                <p>• Real-time response timer ✅</p>
-                <p>• Multiple AI provider support ✅</p>
-                <p>• Industry-specific for broadcast/media</p>
-                <p>• Google Drive integration (in progress)</p>
-              </div>
-            </div>
+            
           </div>
         </div>
       </div>
